@@ -1,0 +1,88 @@
+//-----------------------------------------------------------------------------// APB Slave RTL with Parameterized Wait Cycles, Error Handling, and FSM
+//-----------------------------------------------------------------------------`timescale 1ns/1ps
+
+module slave #(
+    parameter ADDR_WIDTH = 3,
+    parameter DATA_WIDTH = 32,
+    parameter WAIT_CYCLES = 2
+)(
+    input                       i_clk,
+    input                       i_presetn,
+    input                       i_psel,
+    input                       i_penable,
+    input      [ADDR_WIDTH-1:0] i_paddr,
+    input                       i_pwrite,
+    input      [DATA_WIDTH-1:0] i_pwdata,
+    output reg                  o_pready,
+    output reg                  o_pslverr,
+    output reg [DATA_WIDTH-1:0] o_prdata
+);
+
+    typedef enum logic [1:0] {
+        IDLE   = 2'b00,
+        SETUP  = 2'b01,
+        ACCESS = 2'b10
+    } state_t;
+
+    state_t state;
+    reg [DATA_WIDTH-1:0] slave_mem [0:(1<<ADDR_WIDTH)-1];
+  reg [$clog2(WAIT_CYCLES+1) - 1 :0] wait_count;
+    reg access_valid;
+
+    //--------------------------------------------------
+    // FSM with Wait Cycle and Error Support
+    //--------------------------------------------------
+    always @(posedge i_clk or negedge i_presetn) begin
+        if (!i_presetn) begin
+            state       <= IDLE;
+            wait_count  <= 0;
+            o_pslverr   <= 1'b0;
+            o_prdata    <= 0;
+            o_pready    <= 0;
+            access_valid <= 0;
+            for (int i = 0; i < (1<<ADDR_WIDTH); i++)
+                slave_mem[i] <= 0;
+        end else begin
+            case (state)
+                IDLE: begin
+                    o_pready <= 0;
+                    if (i_psel && !i_penable) begin
+                        state <= SETUP;
+                    end
+                end
+                SETUP: begin
+                    o_pready <= 0;
+                    if (i_psel && i_penable) begin
+                        if (i_paddr >= (1 << ADDR_WIDTH)) begin
+                            o_pslverr <= 1;
+                            o_pready  <= 1;
+                            state     <= IDLE;
+                        end else begin
+                            o_pslverr   <= 0;
+                            wait_count  <= WAIT_CYCLES;
+                            access_valid <= 1;
+                            state       <= ACCESS;
+                        end
+                    end
+                end
+                ACCESS: begin
+                    if (wait_count != 0) begin
+                        wait_count <= wait_count - 1;
+                        o_pready <= 0;
+                    end else if (access_valid) begin
+                        o_pready <= 1;
+                        if (i_pwrite) begin
+                            slave_mem[i_paddr] <= i_pwdata;
+                        end else begin
+                            o_prdata <= slave_mem[i_paddr];
+                        end
+                        access_valid <= 0;
+                    end else begin
+                        o_pready <= 0;
+                        state    <= IDLE;
+                    end
+                end
+            endcase
+        end
+    end
+endmodule
